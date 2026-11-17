@@ -15,7 +15,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 # ==========================================
 # 1. Telegram Credentials (Buy Bot)
 # ==========================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "9001018100:AAFS9F-oBYT7tJNRhEthynEr3H3FAGPiaFM").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "9001018100:AAHMhA03MsTgcwsThqJeYTKYeNhnMQSDwp0").strip()
 
 # Authorized Admin / User Chat IDs (Aakash & Ajay)
 DEFAULT_ADMIN_CHAT_IDS = [5701727023, 1988639571]
