@@ -9,7 +9,7 @@ import time
 import json
 import asyncio
 import logging
-from typing import Optional, List, Callable, Awaitable, Tuple
+from typing import Optional, List, Callable, Awaitable, Tuple, Dict, Any
 from playwright.async_api import Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 
 import config
