@@ -100,6 +100,66 @@ class BrowserManager:
         await context.add_init_script(init_script)
         return context
 
+    async def create_context_for_account(
+        self,
+        account: Optional[Dict[str, Any]] = None,
+    ) -> BrowserContext:
+        """Creates an authenticated BrowserContext specifically configured for a given user account."""
+        await self.initialize()
+
+        storage_path = None
+        if account:
+            st_path = account.get("storage_state_path")
+            if st_path and Path(st_path).exists():
+                storage_path = str(st_path)
+            elif config.STORAGE_STATE_FILE.exists():
+                storage_path = str(config.STORAGE_STATE_FILE)
+        elif config.STORAGE_STATE_FILE.exists():
+            storage_path = str(config.STORAGE_STATE_FILE)
+
+        context = await self._browser.new_context(
+            storage_state=storage_path,
+            user_agent=DEFAULT_USER_AGENT,
+            viewport={"width": 1366, "height": 768},
+            locale="en-IN",
+            timezone_id="Asia/Kolkata",
+        )
+
+        # Anti-detection & token auto-injection
+        token_injection = ""
+        if account and account.get("token"):
+            tok = account["token"]
+            token_injection = f"""
+                try {{
+                    localStorage.setItem('token', {json.dumps(tok)});
+                    localStorage.setItem('auth_token', {json.dumps(tok)});
+                }} catch (e) {{}}
+            """
+
+        init_script = f"""
+            Object.defineProperty(navigator, 'webdriver', {{
+                get: () => undefined
+            }});
+            window.chrome = {{
+                runtime: {{}}
+            }};
+            {token_injection}
+            try {{
+                setInterval(() => {{
+                    const btns = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+                    for (const b of btns) {{
+                        const txt = (b.innerText || '').toLowerCase().trim();
+                        if (txt.includes('stay on this site') || txt.includes('no, stay')) {{
+                            b.click();
+                            break;
+                        }}
+                    }}
+                }}, 250);
+            }} catch (e) {{}}
+        """
+        await context.add_init_script(init_script)
+        return context
+
     async def capture_screenshot(self, page: Page, name_prefix: str = "shot") -> str:
         """Takes a full page screenshot and saves it to SCREENSHOT_DIR."""
         try:

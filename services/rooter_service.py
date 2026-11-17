@@ -190,23 +190,41 @@ class RooterService(BasePlatform):
         quantity: int = 2,
         simulation: bool = False,
         progress_callback: Optional[ProgressCallback] = None,
+        account: Optional[Dict[str, Any]] = None,
     ) -> PurchaseResult:
         """
-        Executes immediate restock purchase for ₹1,000 PlayStation card x 2 cards.
-        Extracts voucher code, PIN, order ID, and captures screenshot.
+        Executes immediate restock purchase for PlayStation cards.
+        Supports multi-account authentication, balance verification, and PIN extraction.
         """
         context: Optional[BrowserContext] = None
         page: Optional[Page] = None
         screenshot_path: Optional[str] = None
 
         total_amount = denomination * quantity
+        acc_label = account.get("label", "Default") if account else "Default"
+
+        # Pre-flight Wallet Balance Check
+        if account and not simulation and not config.SIMULATION_MODE:
+            acc_bal = float(account.get("wallet_balance", 0.0) or 0.0)
+            if acc_bal < total_amount:
+                logger.warning(f"[{acc_label}] Insufficient balance: ₹{acc_bal:.2f} < ₹{total_amount:.2f}")
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message=f"Not enough balance to place order (Balance: ₹{acc_bal:,.2f}, Required: ₹{total_amount:,.2f})",
+                )
 
         try:
             if progress_callback:
-                await progress_callback(f"Opening PlayStation voucher page (₹{denomination:,} x {quantity})...", "🚀")
+                await progress_callback(f"[{acc_label}] Opening PlayStation voucher page (₹{denomination:,} x {quantity})...", "🚀")
 
-            # Launch browser with saved session
-            context = await browser_manager.create_context(apply_storage_state=True)
+            # Launch browser with account session
+            if account:
+                context = await browser_manager.create_context_for_account(account)
+            else:
+                context = await browser_manager.create_context(apply_storage_state=True)
             page = await context.new_page()
 
             # Direct navigation to PlayStation gift cards page
@@ -342,6 +360,12 @@ class RooterService(BasePlatform):
 
             # Deduplicate extracted codes
             unique_codes = list(dict.fromkeys(code_matches))
+
+            # Deduct balance on account if live order
+            if account and not simulation and not config.SIMULATION_MODE:
+                from services.account_manager import account_manager
+                account_manager.deduct_balance(account["id"], total_amount)
+                asyncio.create_task(account_manager.sync_all_balances())
 
             return PurchaseResult(
                 success=True,

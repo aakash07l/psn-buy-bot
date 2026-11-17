@@ -2,6 +2,7 @@
 PlayStation Sniper & Auto-Buy Bot (Bot 2) - Main Entry Point.
 Listens on local webhook (port 5000) for Bot 1 triggers and manages Telegram interface.
 ZERO polling on Rooter while idle to prevent account bans!
+Supports multi-account (up to 50 accounts), Cookie/Token & Phone+OTP login, /snipe, /stop, and /accounts.
 """
 
 import sys
@@ -34,18 +35,29 @@ from bot.states import BotState
 from bot.handlers import (
     start_command,
     status_command,
-    toggle_sim_handler,
+    snipe_command,
+    stop_command,
+    accounts_command,
     balance_command,
     manual_buy_command,
     set_target_command,
     set_email_command,
-    login_start_handler,
+    toggle_sim_handler,
+    choose_login_type_handler,
+    start_cookie_login_flow,
+    handle_cookie_data_received,
+    start_otp_login_flow,
     handle_phone_received,
     handle_otp_received,
     cancel_flow,
+    toggle_sniper_arm_callback,
+    toggle_account_callback,
+    delete_account_callback,
+    refresh_all_balances_callback,
 )
-from services.webhook_server import create_webhook_app
+from services.webhook_server import create_webhook_app, is_sniper_active
 from services.browser_manager import browser_manager
+from services.account_manager import account_manager
 
 # Logging setup
 logging.basicConfig(
@@ -68,11 +80,30 @@ def build_telegram_application():
 
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
 
-    # 1. Interactive Phone + OTP Login Conversation
-    login_conversation = ConversationHandler(
+    # 1. Conversation Handler: Cookie / Token Paste Login
+    cookie_conversation = ConversationHandler(
         entry_points=[
-            CommandHandler("login", login_start_handler),
-            CallbackQueryHandler(login_start_handler, pattern="^start_login_flow$"),
+            CallbackQueryHandler(start_cookie_login_flow, pattern="^login_method_cookie$"),
+            CommandHandler("add_token", start_cookie_login_flow),
+        ],
+        states={
+            BotState.AWAITING_COOKIE_DATA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cookie_data_received),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel_flow),
+            CallbackQueryHandler(cancel_flow, pattern="^cancel_action$"),
+        ],
+        per_chat=True,
+    )
+    app.add_handler(cookie_conversation)
+
+    # 2. Conversation Handler: Phone + SMS OTP Login
+    otp_conversation = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(start_otp_login_flow, pattern="^login_method_otp$"),
+            CommandHandler("add_phone", start_otp_login_flow),
         ],
         states={
             BotState.AWAITING_PHONE: [
@@ -88,23 +119,34 @@ def build_telegram_application():
         ],
         per_chat=True,
     )
-    app.add_handler(login_conversation)
+    app.add_handler(otp_conversation)
 
-    # 2. Command Handlers
+    # 3. Core Command Handlers
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("snipe", snipe_command))
+    app.add_handler(CommandHandler("stop", stop_command))
+    app.add_handler(CommandHandler("accounts", accounts_command))
+    app.add_handler(CommandHandler("acc", accounts_command))
+    app.add_handler(CommandHandler("login", choose_login_type_handler))
     app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("sim", toggle_sim_handler))
     app.add_handler(CommandHandler("balance", balance_command))
     app.add_handler(CommandHandler("buy", manual_buy_command))
+    app.add_handler(CommandHandler("sim", toggle_sim_handler))
     app.add_handler(CommandHandler("set_target", set_target_command))
     app.add_handler(CommandHandler("set_email", set_email_command))
 
-    # 3. Callback Query Handlers
+    # 4. Callback Query Handlers
+    app.add_handler(CallbackQueryHandler(choose_login_type_handler, pattern="^choose_login_type$"))
+    app.add_handler(CallbackQueryHandler(accounts_command, pattern="^show_accounts_menu$"))
+    app.add_handler(CallbackQueryHandler(toggle_sniper_arm_callback, pattern="^toggle_sniper_arm$"))
+    app.add_handler(CallbackQueryHandler(toggle_account_callback, pattern="^toggle_acc_"))
+    app.add_handler(CallbackQueryHandler(delete_account_callback, pattern="^del_acc_"))
+    app.add_handler(CallbackQueryHandler(refresh_all_balances_callback, pattern="^refresh_all_acc_balances$"))
     app.add_handler(CallbackQueryHandler(status_command, pattern="^cmd_status$"))
     app.add_handler(CallbackQueryHandler(balance_command, pattern="^cmd_balance$"))
     app.add_handler(CallbackQueryHandler(toggle_sim_handler, pattern="^toggle_sim$"))
     app.add_handler(CallbackQueryHandler(manual_buy_command, pattern="^cmd_manual_buy$"))
-    app.add_handler(CallbackQueryHandler(status_command, pattern="^show_target_info$"))
+    app.add_handler(CallbackQueryHandler(start_command, pattern="^cmd_start_menu$"))
 
     return app
 
@@ -129,17 +171,22 @@ async def start_services():
     logger.info(f"⚡ Internal Webhook Server listening on {config.WEBHOOK_HOST}:{config.WEBHOOK_PORT}")
 
     # Boot Notification to Telegram
+    sniper_state_str = "🟢 ARMED" if is_sniper_active() else "⏸️ PAUSED"
+    active_count = len(account_manager.get_active())
+    total_count = len(account_manager.get_all())
+
     for cid in config.ADMIN_CHAT_IDS:
         try:
             await tg_app.bot.send_message(
                 chat_id=cid,
                 text=(
                     f"🤖 <b>PlayStation Buy Bot (Bot 2) Started!</b>\n\n"
-                    f"📡 <b>Status:</b> 🟢 <b>STANDBY MODE ACTIVE</b>\n"
+                    f"📡 <b>Sniper Status:</b> {sniper_state_str}\n"
+                    f"👥 <b>Connected Accounts:</b> {active_count} active / {total_count} total\n"
                     f"🎯 <b>Target:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} cards\n"
                     f"⚡ <b>Internal Webhook:</b> Listening on port {config.WEBHOOK_PORT}\n"
                     f"🛡️ <b>Anti-Ban Zero-Polling:</b> Active (0 Rooter requests until trigger)\n\n"
-                    f"<i>Run /login to authenticate your Rooter account (Phone + OTP).</i>"
+                    f"<i>Commands: /accounts to manage accounts, /snipe to arm, /stop to pause.</i>"
                 ),
                 parse_mode="HTML"
             )

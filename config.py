@@ -62,6 +62,13 @@ SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Path to persisted browser authentication state (created via /login)
 STORAGE_STATE_FILE = SESSION_DIR / "rooter_storage_state.json"
+ACCOUNTS_DIR = SESSION_DIR / "accounts"
+ACCOUNTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Sniper Auto-Buy Active State (Armed / Paused)
+SNIPER_ACTIVE = os.getenv("SNIPER_ACTIVE", "True").lower() in ("true", "1", "yes")
+MAX_CONCURRENT_BROWSERS = int(os.getenv("MAX_CONCURRENT_BROWSERS", "8"))
+MAX_ACCOUNTS = 50
 
 # Rooter URLs
 ROOTER_BASE_URL = "https://shop.rooter.gg"
