@@ -160,39 +160,50 @@ async def handle_phone_received(update: Update, context: ContextTypes.DEFAULT_TY
         # 1. Dismiss any location or region modals
         await rooter_service.dismiss_location_popup(page)
 
-        # 2. Click Login button (Try specific test-id first, then class, then text)
-        login_btn = page.locator(
-            "button[data-testid='header-login-btn'], "
-            "button[class*='loginButton'], "
-            "button:has-text('Login'), "
-            "button:has-text('Sign In'), "
-            "div:has-text('Login')"
-        ).first
+        # 2. Click strictly the Login BUTTON in the header (Never click parent div)
+        login_btn = page.locator("button[data-testid='header-login-btn']").first
+        if not await login_btn.is_visible(timeout=3000):
+            login_btn = page.locator("button:has-text('Login'), button[class*='loginButton']").first
 
-        if await login_btn.is_visible(timeout=5000):
-            try:
-                await login_btn.click(force=True, timeout=2000)
-            except Exception:
-                await login_btn.dispatch_event("click")
+        if await login_btn.is_visible(timeout=4000):
+            await login_btn.scroll_into_view_if_needed()
+            await login_btn.click(force=True)
             await page.wait_for_timeout(1500)
 
-        # 3. Dismiss location popup again in case it appeared
-        await rooter_service.dismiss_location_popup(page)
+        # 3. Check if login drawer opened. If not, try dispatching click event or clicking inner text
+        drawer_visible = await page.locator(".mantine-Drawer-content, [role='dialog'], input[placeholder*='Mobile' i]").first.is_visible(timeout=2000)
+        if not drawer_visible and await login_btn.is_visible(timeout=1000):
+            try:
+                await login_btn.dispatch_event("click")
+                await page.wait_for_timeout(1500)
+            except Exception:
+                pass
 
-        # 4. Search for phone input
+        # 4. Fallback: If still not opened, navigate to PlayStation product and click Buy to trigger login drawer
+        drawer_visible = await page.locator(".mantine-Drawer-content, [role='dialog'], input[placeholder*='Mobile' i]").first.is_visible(timeout=1000)
+        if not drawer_visible:
+            logger.info("Header login did not trigger drawer. Opening product page to trigger login drawer...")
+            await page.goto(config.ROOTER_PLAYSTATION_URL, timeout=config.BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
+            await page.wait_for_timeout(1500)
+            await rooter_service.dismiss_location_popup(page)
+            buy_trigger = page.locator("button:has-text('Proceed to Pay'), button:has-text('Pay via wallet'), button:has-text('Buy Now'), button[data-testid='header-login-btn']").first
+            if await buy_trigger.is_visible(timeout=4000):
+                await buy_trigger.click(force=True)
+                await page.wait_for_timeout(1500)
+
+        # 5. Search for phone input
         phone_selectors = [
             "input[placeholder*='Mobile' i]",
+            "input[placeholder*='Enter Mobile' i]",
             "input[placeholder*='number' i]",
             "input[type='tel']",
-            "input[name*='phone']",
-            "input[name*='mobile']",
             ".mantine-Drawer-content input",
             "div[role='dialog'] input",
         ]
         phone_input = None
         for sel in phone_selectors:
             cand = page.locator(sel).first
-            if await cand.is_visible(timeout=1000):
+            if await cand.is_visible(timeout=1500):
                 phone_input = cand
                 break
 
