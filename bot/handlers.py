@@ -155,18 +155,66 @@ async def handle_phone_received(update: Update, context: ContextTypes.DEFAULT_TY
         page = await browser_ctx.new_page()
 
         await page.goto(config.ROOTER_BASE_URL, timeout=config.BROWSER_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(2500)
 
-        # Click Login
-        login_btn = page.locator("button:has-text('Login'), div:has-text('Login'), button:has-text('Sign In')").first
-        if await login_btn.is_visible(timeout=4000):
-            await login_btn.click()
-            await page.wait_for_timeout(1000)
+        # 1. Dismiss any location or region modals
+        await rooter_service.dismiss_location_popup(page)
 
-        # Fill phone number
-        phone_input = page.locator("input[type='tel'], input[placeholder*='Mobile'], input[name*='phone']").first
-        if not await phone_input.is_visible(timeout=5000):
-            await status_msg.edit_text("❌ Login form not found on Rooter. Please try again.")
+        # 2. Click Login button (Try specific test-id first, then class, then text)
+        login_btn = page.locator(
+            "button[data-testid='header-login-btn'], "
+            "button[class*='loginButton'], "
+            "button:has-text('Login'), "
+            "button:has-text('Sign In'), "
+            "div:has-text('Login')"
+        ).first
+
+        if await login_btn.is_visible(timeout=5000):
+            try:
+                await login_btn.click(force=True, timeout=2000)
+            except Exception:
+                await login_btn.dispatch_event("click")
+            await page.wait_for_timeout(1500)
+
+        # 3. Dismiss location popup again in case it appeared
+        await rooter_service.dismiss_location_popup(page)
+
+        # 4. Search for phone input
+        phone_selectors = [
+            "input[placeholder*='Mobile' i]",
+            "input[placeholder*='number' i]",
+            "input[type='tel']",
+            "input[name*='phone']",
+            "input[name*='mobile']",
+            ".mantine-Drawer-content input",
+            "div[role='dialog'] input",
+        ]
+        phone_input = None
+        for sel in phone_selectors:
+            cand = page.locator(sel).first
+            if await cand.is_visible(timeout=1000):
+                phone_input = cand
+                break
+
+        # If not immediately visible, wait up to 4s for drawer animation
+        if not phone_input:
+            try:
+                phone_input = page.locator("input[placeholder*='Mobile' i], input[type='tel'], .mantine-Drawer-content input").first
+                await phone_input.wait_for(state="visible", timeout=4000)
+            except Exception:
+                phone_input = None
+
+        if not phone_input or not await phone_input.is_visible(timeout=500):
+            # Capture debug screenshot to show user what Rooter is displaying
+            shot_path = await browser_manager.capture_screenshot(page, name_prefix="login_error")
+            await status_msg.edit_text("❌ Login form not found on Rooter. Debug screenshot below:")
+            if shot_path and os.path.exists(shot_path):
+                with open(shot_path, "rb") as f:
+                    await context.bot.send_photo(
+                        chat_id=update.effective_chat.id,
+                        photo=f,
+                        caption="📸 Screenshot of Rooter screen during login attempt"
+                    )
             await page.close()
             await browser_ctx.close()
             return ConversationHandler.END
@@ -175,8 +223,18 @@ async def handle_phone_received(update: Update, context: ContextTypes.DEFAULT_TY
         await page.wait_for_timeout(500)
 
         # Click Continue / Get OTP
-        get_otp_btn = page.locator("button:has-text('Get OTP'), button:has-text('Continue'), button:has-text('Next')").first
-        await get_otp_btn.click()
+        get_otp_btn = page.locator(
+            "button:has-text('Get OTP'), "
+            "button:has-text('Continue'), "
+            "button:has-text('Next'), "
+            ".mantine-Drawer-content button[type='submit'], "
+            "div[role='dialog'] button[type='submit']"
+        ).first
+        if await get_otp_btn.is_visible(timeout=3000):
+            await get_otp_btn.click(force=True)
+        else:
+            await phone_input.press("Enter")
+
         await page.wait_for_timeout(1500)
 
         # Store session in memory for the OTP step
@@ -220,21 +278,28 @@ async def handle_otp_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     try:
         # Fill OTP inputs
-        otp_inputs = page.locator("input[type='number'], input[inputmode='numeric'], input[class*='pinInput']")
+        otp_inputs = page.locator("input[type='number'], input[inputmode='numeric'], input[class*='pinInput'], .mantine-PinInput-input")
         count = await otp_inputs.count()
         if count > 1:
             for i in range(min(count, len(clean_otp))):
                 await otp_inputs.nth(i).fill(clean_otp[i])
         else:
-            single_input = page.locator("input[placeholder*='OTP'], input[name*='otp'], input[type='tel']").first
+            single_input = page.locator("input[placeholder*='OTP'], input[name*='otp'], input[type='tel'], input[inputmode='numeric']").first
             await single_input.fill(clean_otp)
 
         await page.wait_for_timeout(800)
 
         # Click Verify / Submit button
-        verify_btn = page.locator("button:has-text('Verify'), button:has-text('Submit'), button:has-text('Done')").first
+        verify_btn = page.locator(
+            "button:has-text('Verify'), "
+            "button:has-text('Submit'), "
+            "button:has-text('Done'), "
+            "button:has-text('Continue'), "
+            ".mantine-Drawer-content button[type='submit'], "
+            "div[role='dialog'] button[type='submit']"
+        ).first
         if await verify_btn.is_visible(timeout=3000):
-            await verify_btn.click()
+            await verify_btn.click(force=True)
 
         await page.wait_for_timeout(3500)
 
