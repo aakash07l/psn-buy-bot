@@ -12,10 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
 load_dotenv(dotenv_path=ENV_PATH)
 
-# ==========================================
-# 1. Telegram Credentials (Buy Bot)
-# ==========================================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "9001018100:AAHMhA03MsTgcwsThqJeYTKYeNhnMQSDwp0").strip()
+# Telegram Bot Token (Buy Bot)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+if not BOT_TOKEN or "AAFS9F" in BOT_TOKEN:
+    BOT_TOKEN = "9001018100:AAHMhA03MsTgcwsThqJeYTKYeNhnMQSDwp0"
 
 # Authorized Admin / User Chat IDs (Aakash & Ajay)
 DEFAULT_ADMIN_CHAT_IDS = [5701727023, 1988639571]

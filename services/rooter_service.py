@@ -279,18 +279,20 @@ class RooterService(BasePlatform):
                 buy_btn = page.locator(
                     "button[data-testid='proceed-to-pay'], button[testid='proceed-to-pay'], "
                     "button[data-testid='add-address-btn'], button:has-text('Proceed to Pay'), "
-                    "button:has-text('Pay via wallet'), button:has-text('Buy Now'), button:has-text('Proceed')"
+                    "button:has-text('Pay via wallet'), button:has-text('Pay ₹'), button:has-text('Pay Rs'), "
+                    "button:has-text('Buy Now'), button:has-text('Proceed')"
                 ).first
-                if await buy_btn.is_visible(timeout=4000):
+                if await buy_btn.is_visible(timeout=5000):
+                    await buy_btn.scroll_into_view_if_needed()
                     await buy_btn.click(force=True)
-                    await page.wait_for_timeout(1200)
+                    await page.wait_for_timeout(1500)
 
             # 6. Inside Delivery Details modal
             await self.dismiss_location_popup(page)
             
             # Fill email if present and empty
             if config.DELIVERY_EMAIL:
-                email_input = page.locator("input[placeholder*='Email'], input[name*='email'], input[type='email']").first
+                email_input = page.locator("input[placeholder*='Email' i], input[name*='email'], input[type='email']").first
                 try:
                     if await email_input.is_visible(timeout=1000):
                         current_val = await email_input.input_value()
@@ -303,12 +305,16 @@ class RooterService(BasePlatform):
             modal_pay_btn = page.locator(
                 ".mantine-Modal-content button:has-text('Pay via wallet'), "
                 "div[role='dialog'] button:has-text('Pay via wallet'), "
+                ".mantine-Modal-content button:has-text('Proceed to Pay'), "
+                "div[role='dialog'] button:has-text('Proceed to Pay'), "
+                ".mantine-Modal-content button:has-text('Pay ₹'), "
+                ".mantine-Modal-content button:has-text('Pay Rs'), "
                 "button:has-text('Pay via wallet'), "
                 ".mantine-Modal-content button:has-text('Pay'), "
-                ".mantine-Modal-content button:has-text('Proceed to Pay')"
+                ".mantine-Modal-content button[type='submit']"
             ).last
 
-            if await modal_pay_btn.is_visible(timeout=5000):
+            if await modal_pay_btn.is_visible(timeout=6000):
                 if progress_callback:
                     await progress_callback(f"Submitting final wallet payment for ₹{total_amount:,}...", "💳")
                 await modal_pay_btn.click(force=True)
