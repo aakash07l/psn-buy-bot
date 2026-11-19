@@ -65,14 +65,19 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_accs = account_manager.get_all()
     total_bal = account_manager.get_total_balance()
 
-    total_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    single_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, 1)
+    max_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    est_cards = min(config.TARGET_QUANTITY, int(total_bal // single_cost)) if single_cost > 0 else config.TARGET_QUANTITY
+    eligibility_str = f"🟢 Ready for {est_cards} card(s)" if est_cards >= 1 else "⚠️ Balance under ₹1,156"
+
     msg = (
         f"🤖 <b>PlayStation Sniper & Auto-Buy Bot (Bot 2)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Sniper Status:</b> {sniper_status}\n"
         f"• <b>Connected Accounts:</b> <b>{len(active_accs)}</b> active / {len(total_accs)} total\n"
-        f"• <b>Active Wallet Balance:</b> <b>₹{total_bal:,.2f}</b>\n"
-        f"• <b>Target:</b> 🎮 <b>PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} card(s)</b> (Total: ₹{total_cost:,.2f}/acc)\n"
+        f"• <b>Active Wallet Balance:</b> <b>₹{total_bal:,.2f}</b> ({eligibility_str})\n"
+        f"• <b>Target:</b> 🎮 <b>PlayStation ₹{config.TARGET_DENOMINATION:,}</b> (Max: {config.TARGET_QUANTITY} cards)\n"
+        f"• <b>Auto-Scale by Balance:</b> 1k balance = 1 card (₹{single_cost:,.0f}) | 2k+ balance = 2 cards (₹{max_cost:,.0f})\n"
         f"• <b>Execution Mode:</b> {sim_status}\n"
         f"• <b>Zero-Polling:</b> Active (0 Rooter requests while idle to prevent bans)\n"
         f"• <b>Internal Webhook:</b> Listening on port <code>{config.WEBHOOK_PORT}</code>\n"
@@ -99,13 +104,17 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_accs = account_manager.get_all()
     total_bal = account_manager.get_total_balance()
 
-    total_card_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    single_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, 1)
+    max_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    est_cards = min(config.TARGET_QUANTITY, int(total_bal // single_cost)) if single_cost > 0 else config.TARGET_QUANTITY
+
     msg = (
         f"📊 <b>Buy Bot System Status</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Sniper State:</b> {sniper_status}\n"
-        f"• <b>Target Voucher:</b> PlayStation ₹{config.TARGET_DENOMINATION:,}\n"
-        f"• <b>Target Quantity:</b> {config.TARGET_QUANTITY} card(s) (Total with fee: ₹{total_card_cost:,.2f}/acc)\n"
+        f"• <b>Target Voucher:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} (Max: {config.TARGET_QUANTITY} cards)\n"
+        f"• <b>Auto-Scale by Balance:</b> 1k balance = 1 card (₹{single_cost:,.0f}) | 2k+ balance = 2 cards (₹{max_cost:,.0f})\n"
+        f"• <b>Your Balance:</b> ₹{total_bal:,.2f} ➔ <b>Eligible for {est_cards} card(s)</b>\n"
         f"• <b>Balance Enforcement:</b> {'🔴 Disabled (/balance_check on)' if getattr(config, 'DISABLE_BALANCE_CHECK', False) else '🟢 Enabled (/balance_check off)'}\n"
         f"• <b>Active Accounts:</b> {len(active_accs)} of {len(total_accs)}\n"
         f"• <b>Combined Active Balance:</b> ₹{total_bal:,.2f}\n"
@@ -144,17 +153,20 @@ async def snipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_sniper_active(True)
     active_accs = account_manager.get_active()
     total_bal = account_manager.get_total_balance()
-    cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    single_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, 1)
+    max_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
+    est_cards = min(config.TARGET_QUANTITY, int(total_bal // single_cost)) if single_cost > 0 else config.TARGET_QUANTITY
 
     msg = (
         f"🎯 <b>PLAYSTATION SNIPER ARMED & ACTIVE!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• <b>Target:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} card(s) (Total with fees: ₹{cost:,.2f}/acc)\n"
+        f"• <b>Target:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} (Max: {config.TARGET_QUANTITY} cards)\n"
+        f"• <b>Auto-Scale by Balance:</b> 1k balance = 1 card (₹{single_cost:,.0f}) | 2k+ balance = 2 cards (₹{max_cost:,.0f})\n"
         f"• <b>Active Accounts:</b> {len(active_accs)} account(s)\n"
-        f"• <b>Total Balance:</b> ₹{total_bal:,.2f}\n"
+        f"• <b>Total Balance:</b> ₹{total_bal:,.2f} ➔ <b>Will buy {est_cards} card(s)</b>\n"
         f"• <b>Status:</b> 🟢 <b>ARMED</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚡ <i>When Stock Notify Bot detects stock, all {len(active_accs)} active account(s) will execute checkout simultaneously!</i>\n"
+        f"⚡ <i>When stock arrives, each account will buy as many cards as its balance allows (1k balance = 1 card, 2k+ = 2 cards)!</i>\n"
         f"<i>To pause auto-purchasing at any time, run /stop.</i>"
     )
     if update.callback_query:
