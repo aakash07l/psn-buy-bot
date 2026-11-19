@@ -65,13 +65,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_accs = account_manager.get_all()
     total_bal = account_manager.get_total_balance()
 
+    total_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
     msg = (
         f"🤖 <b>PlayStation Sniper & Auto-Buy Bot (Bot 2)</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Sniper Status:</b> {sniper_status}\n"
         f"• <b>Connected Accounts:</b> <b>{len(active_accs)}</b> active / {len(total_accs)} total\n"
         f"• <b>Active Wallet Balance:</b> <b>₹{total_bal:,.2f}</b>\n"
-        f"• <b>Target:</b> 🎮 <b>PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} cards</b> (₹{config.TARGET_DENOMINATION * config.TARGET_QUANTITY:,}/acc)\n"
+        f"• <b>Target:</b> 🎮 <b>PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} card(s)</b> (Total: ₹{total_cost:,.2f}/acc)\n"
         f"• <b>Execution Mode:</b> {sim_status}\n"
         f"• <b>Zero-Polling:</b> Active (0 Rooter requests while idle to prevent bans)\n"
         f"• <b>Internal Webhook:</b> Listening on port <code>{config.WEBHOOK_PORT}</code>\n"
@@ -98,12 +99,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_accs = account_manager.get_all()
     total_bal = account_manager.get_total_balance()
 
+    total_card_cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
     msg = (
         f"📊 <b>Buy Bot System Status</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"• <b>Sniper State:</b> {sniper_status}\n"
         f"• <b>Target Voucher:</b> PlayStation ₹{config.TARGET_DENOMINATION:,}\n"
-        f"• <b>Target Quantity:</b> {config.TARGET_QUANTITY} cards (Total: ₹{config.TARGET_DENOMINATION * config.TARGET_QUANTITY:,}/acc)\n"
+        f"• <b>Target Quantity:</b> {config.TARGET_QUANTITY} card(s) (Total with fee: ₹{total_card_cost:,.2f}/acc)\n"
+        f"• <b>Balance Enforcement:</b> {'🔴 Disabled (/balance_check on)' if getattr(config, 'DISABLE_BALANCE_CHECK', False) else '🟢 Enabled (/balance_check off)'}\n"
         f"• <b>Active Accounts:</b> {len(active_accs)} of {len(total_accs)}\n"
         f"• <b>Combined Active Balance:</b> ₹{total_bal:,.2f}\n"
         f"• <b>Execution Mode:</b> {sim_status}\n"
@@ -141,12 +144,12 @@ async def snipe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_sniper_active(True)
     active_accs = account_manager.get_active()
     total_bal = account_manager.get_total_balance()
-    cost = config.TARGET_DENOMINATION * config.TARGET_QUANTITY
+    cost = config.get_card_total_cost(config.TARGET_DENOMINATION, config.TARGET_QUANTITY)
 
     msg = (
         f"🎯 <b>PLAYSTATION SNIPER ARMED & ACTIVE!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"• <b>Target:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} cards (₹{cost:,}/acc)\n"
+        f"• <b>Target:</b> PlayStation ₹{config.TARGET_DENOMINATION:,} x {config.TARGET_QUANTITY} card(s) (Total with fees: ₹{cost:,.2f}/acc)\n"
         f"• <b>Active Accounts:</b> {len(active_accs)} account(s)\n"
         f"• <b>Total Balance:</b> ₹{total_bal:,.2f}\n"
         f"• <b>Status:</b> 🟢 <b>ARMED</b>\n"
@@ -654,7 +657,7 @@ async def set_target_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: <code>/set_target 1000 2</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("Usage: <code>/set_target 1000 1</code>", parse_mode=ParseMode.HTML)
         return
 
     try:
@@ -662,12 +665,46 @@ async def set_target_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         qty = int(context.args[1]) if len(context.args) > 1 else config.TARGET_QUANTITY
         config.TARGET_DENOMINATION = denom
         config.TARGET_QUANTITY = qty
+        total_cost = config.get_card_total_cost(denom, qty)
         await update.message.reply_text(
-            f"✅ Target updated to <b>PlayStation ₹{denom:,} x {qty} cards</b> (Total: ₹{denom * qty:,}/acc)!",
+            f"✅ Target updated to <b>PlayStation ₹{denom:,} x {qty} card(s)</b> (Total with fee: ₹{total_cost:,.2f}/acc)!",
             parse_mode=ParseMode.HTML
         )
     except ValueError:
-        await update.message.reply_text("❌ Please enter valid numbers. Example: <code>/set_target 1000 2</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text("❌ Please enter valid numbers. Example: <code>/set_target 1000 1</code>", parse_mode=ParseMode.HTML)
+
+
+async def balance_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /balance_check [on|off] to toggle pre-flight balance enforcement."""
+    if not is_authorized(update.effective_user.id):
+        return
+
+    if context.args:
+        arg = context.args[0].lower().strip()
+        if arg in ("off", "disable", "no", "0"):
+            config.DISABLE_BALANCE_CHECK = True
+            await update.message.reply_text(
+                "🟢 <b>Pre-flight Balance Check DISABLED!</b>\n\n"
+                "The bot will attempt order checkout for all active accounts regardless of tracked balance.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+        elif arg in ("on", "enable", "yes", "1"):
+            config.DISABLE_BALANCE_CHECK = False
+            await update.message.reply_text(
+                "🛡️ <b>Pre-flight Balance Check ENABLED!</b>\n\n"
+                "The bot will verify wallet balance before checkout.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+    status = "🔴 DISABLED" if getattr(config, "DISABLE_BALANCE_CHECK", False) else "🟢 ENABLED"
+    await update.message.reply_text(
+        f"⚙️ <b>Balance Check Status:</b> {status}\n\n"
+        f"• To disable balance requirement: <code>/balance_check off</code>\n"
+        f"• To enable balance requirement: <code>/balance_check on</code>",
+        parse_mode=ParseMode.HTML
+    )
 
 
 async def set_email_command(update: Update, context: ContextTypes.DEFAULT_TYPE):

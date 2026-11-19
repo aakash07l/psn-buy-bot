@@ -200,21 +200,26 @@ class RooterService(BasePlatform):
         page: Optional[Page] = None
         screenshot_path: Optional[str] = None
 
-        total_amount = denomination * quantity
+        total_amount = config.get_card_total_cost(denomination, quantity)
+        single_amount = config.get_card_total_cost(denomination, 1)
         acc_label = account.get("label", "Default") if account else "Default"
 
-        # Pre-flight Wallet Balance Check
-        if account and not simulation and not config.SIMULATION_MODE:
+        # Pre-flight Wallet Balance Check (respects DISABLE_BALANCE_CHECK)
+        if account and not simulation and not config.SIMULATION_MODE and not getattr(config, "DISABLE_BALANCE_CHECK", False):
             acc_bal = float(account.get("wallet_balance", 0.0) or 0.0)
-            if acc_bal < total_amount:
-                logger.warning(f"[{acc_label}] Insufficient balance: ₹{acc_bal:.2f} < ₹{total_amount:.2f}")
+            if acc_bal < single_amount:
+                logger.warning(f"[{acc_label}] Insufficient balance: ₹{acc_bal:.2f} < ₹{single_amount:.2f}")
                 return PurchaseResult(
                     success=False,
                     platform="rooter",
                     denomination=denomination,
                     quantity=quantity,
-                    message=f"Not enough balance to place order (Balance: ₹{acc_bal:,.2f}, Required: ₹{total_amount:,.2f})",
+                    message=f"Not enough balance to place order (Balance: ₹{acc_bal:,.2f}, Required: ₹{single_amount:,.2f})",
                 )
+            elif acc_bal < total_amount and quantity > 1:
+                logger.info(f"[{acc_label}] Adjusting quantity from {quantity} to 1 to match available balance ₹{acc_bal:.2f}")
+                quantity = 1
+                total_amount = single_amount
 
         try:
             if progress_callback:

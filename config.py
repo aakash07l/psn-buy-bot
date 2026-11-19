@@ -33,8 +33,25 @@ else:
 # ==========================================
 # Default Target: ₹1,000 PlayStation Card
 TARGET_DENOMINATION = int(os.getenv("TARGET_DENOMINATION", "1000"))
-# Target Quantity to buy: 2 cards = ₹2,000 total
-TARGET_QUANTITY = int(os.getenv("TARGET_QUANTITY", "2"))
+# Target Quantity to buy: 1 card by default (User can change via /set_target)
+TARGET_QUANTITY = int(os.getenv("TARGET_QUANTITY", "1"))
+
+# Rooter card prices including platform convenience fees (from Rooter checkout)
+ROOTER_CARD_PRICES = {
+    1000: 1156.0,
+    2000: 2309.0,
+    3000: 3459.0,
+    4000: 4609.0,
+    5000: 5760.0,
+}
+
+def get_card_total_cost(denomination: int, quantity: int = 1) -> float:
+    """Returns exact Rooter billing cost including convenience fees."""
+    base_price = ROOTER_CARD_PRICES.get(denomination, float(denomination))
+    return round(base_price * quantity, 2)
+
+# Optional: Disable pre-flight balance check if user wants to attempt buy regardless of tracked balance
+DISABLE_BALANCE_CHECK = os.getenv("DISABLE_BALANCE_CHECK", "False").lower() in ("true", "1", "yes")
 
 # Simulation / Dry Run mode (safe mode for testing checkout flow without debiting real balance)
 SIMULATION_MODE = os.getenv("SIMULATION_MODE", "False").lower() in ("true", "1", "yes")

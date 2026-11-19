@@ -94,7 +94,8 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
             return
 
         LAST_PURCHASE_TIME = now
-        total_cost_per_acc = denomination * quantity
+        total_cost_per_acc = config.get_card_total_cost(denomination, quantity)
+        single_card_cost = config.get_card_total_cost(denomination, 1)
 
         # Fetch all active accounts
         active_accounts = account_manager.get_active()
@@ -119,13 +120,13 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
                 )
                 return
 
-        logger.info(f"⚡ SNIPER TRIGGERED: Evaluating {len(active_accounts)} active account(s) for ₹{denomination:,} x {quantity} (₹{total_cost_per_acc:,}/acc)...")
+        logger.info(f"⚡ SNIPER TRIGGERED: Evaluating {len(active_accounts)} active account(s) for ₹{denomination:,} x {quantity} (Total with fees: ₹{total_cost_per_acc:,}/acc)...")
 
-        # 1. Pre-flight Balance Verification (Check real balance to avoid fake checkouts)
-        eligible_accounts: List[Dict[str, Any]] = []
+        # 1. Pre-flight Balance Verification (with automatic fee accounting & 1-card fallback)
+        eligible_accounts: List[tuple] = []
         insufficient_accounts: List[Dict[str, Any]] = []
 
-        if not config.SIMULATION_MODE:
+        if not config.SIMULATION_MODE and not getattr(config, "DISABLE_BALANCE_CHECK", False):
             # Sync live balances in parallel right before checkout
             try:
                 await account_manager.sync_all_balances()
@@ -134,36 +135,41 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
 
             for acc in active_accounts:
                 bal = float(acc.get("wallet_balance", 0.0) or 0.0)
+                acc_label = acc.get("label") or acc.get("id")
+
                 if bal >= total_cost_per_acc:
-                    eligible_accounts.append(acc)
+                    eligible_accounts.append((acc, quantity))
+                elif quantity > 1 and bal >= single_card_cost:
+                    # Account has enough for at least 1 card! Auto-adjust quantity so user never misses restock
+                    eligible_accounts.append((acc, 1))
+                    logger.info(f"[{acc_label}] Auto-adjusted quantity from {quantity} to 1 (Balance: ₹{bal:,.2f})")
                 else:
                     insufficient_accounts.append(acc)
-                    acc_label = acc.get("label") or acc.get("id")
-                    # Send specific insufficient balance message
+                    fee = single_card_cost - denomination
                     await dispatch_telegram_broadcast(
                         bot,
                         f"⚠️ <b>[Account: {acc_label}] Not enough balance to place order!</b>\n\n"
                         f"• <b>Available Balance:</b> ₹{bal:,.2f}\n"
-                        f"• <b>Required Amount:</b> ₹{total_cost_per_acc:,.2f}\n"
+                        f"• <b>Required Amount:</b> ₹{single_card_cost:,.2f} (Card: ₹{denomination:,} + Rooter Fee: ₹{fee:,.2f})\n"
                         f"• <b>Status:</b> ❌ Order skipped for this account."
                     )
         else:
-            eligible_accounts = list(active_accounts)
+            eligible_accounts = [(acc, quantity) for acc in active_accounts]
 
         if not eligible_accounts:
             logger.warning("No accounts have sufficient balance to place the order.")
             await dispatch_telegram_broadcast(
                 bot,
-                f"⚠️ <b>ALL PURCHASES ABORTED:</b> None of the {len(active_accounts)} active account(s) have enough balance for ₹{total_cost_per_acc:,}."
+                f"⚠️ <b>ALL PURCHASES ABORTED:</b> None of the {len(active_accounts)} active account(s) have enough balance for PlayStation ₹{denomination:,} (Total: ₹{single_card_cost:,})."
             )
             return
 
         # 2. Announce purchase firing for eligible accounts
-        acc_names = ", ".join([a.get("label", a["id"]) for a in eligible_accounts])
+        acc_names = ", ".join([f"{a.get('label', a['id'])} (x{q})" for a, q in eligible_accounts])
         await dispatch_telegram_broadcast(
             bot,
             f"⚡ <b>SNIPER ACTIVATED FOR {len(eligible_accounts)} ACCOUNT(S)!</b>\n\n"
-            f"🎯 <b>Target:</b> PlayStation ₹{denomination:,} x {quantity} cards (₹{total_cost_per_acc:,}/acc)\n"
+            f"🎯 <b>Target:</b> PlayStation ₹{denomination:,}\n"
             f"👥 <b>Buying on:</b> {acc_names}\n"
             f"🛒 <i>Executing simultaneous checkout now...</i>"
         )
@@ -171,12 +177,13 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
         # 3. Execute Simultaneous Purchases Concurrently
         semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_BROWSERS)
 
-        async def purchase_single(acc: Dict[str, Any]):
+        async def purchase_single(acc_item: tuple):
+            acc, acc_qty = acc_item
             async with semaphore:
                 try:
                     return await rooter_service.execute_purchase(
                         denomination=denomination,
-                        quantity=quantity,
+                        quantity=acc_qty,
                         simulation=config.SIMULATION_MODE,
                         account=acc,
                     )
@@ -187,21 +194,22 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
                         success=False,
                         platform="rooter",
                         denomination=denomination,
-                        quantity=quantity,
+                        quantity=acc_qty,
                         message=f"Purchase exception: {str(ex)}",
                     )
 
-        tasks = [purchase_single(acc) for acc in eligible_accounts]
+        tasks = [purchase_single(item) for item in eligible_accounts]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         # 4. Process and Broadcast Purchase Results
-        for acc, res in zip(eligible_accounts, results):
+        for (acc, acc_qty), res in zip(eligible_accounts, results):
             acc_label = acc.get("label") or acc.get("id")
+            acc_total = config.get_card_total_cost(denomination, acc_qty)
             if isinstance(res, Exception):
                 await dispatch_telegram_broadcast(
                     bot,
                     f"❌ <b>Purchase Error on {acc_label}</b>\n\n"
-                    f"• Target: PlayStation ₹{denomination:,} x {quantity}\n"
+                    f"• Target: PlayStation ₹{denomination:,} x {acc_qty}\n"
                     f"• Error: <code>{str(res)}</code>"
                 )
             elif res.success:
@@ -219,7 +227,7 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
                     f"👤 <b>Account:</b> {acc_label}\n"
                     f"🎮 <b>Platform:</b> Rooter Shop\n"
                     f"💳 <b>Item:</b> PlayStation Gift Card ₹{denomination:,}\n"
-                    f"📦 <b>Quantity:</b> {quantity} cards (Total: ₹{total_cost_per_acc:,})\n"
+                    f"📦 <b>Quantity:</b> {acc_qty} card(s) (Total Paid: ₹{acc_total:,})\n"
                     f"🆔 <b>Order ID:</b> <code>{res.order_id}</code>\n\n"
                     f"{codes_text}{pin_text}\n\n"
                     f"💡 <i>Tip: Tap any code above to copy it instantly and redeem on PS Store!</i>"
@@ -229,7 +237,7 @@ async def trigger_instant_snipe(denomination: int, quantity: int, bot):
             else:
                 fail_msg = (
                     f"⚠️ <b>Purchase Failed on {acc_label}</b>\n\n"
-                    f"• <b>Target:</b> PlayStation ₹{denomination:,} x {quantity}\n"
+                    f"• <b>Target:</b> PlayStation ₹{denomination:,} x {acc_qty}\n"
                     f"• <b>Reason:</b> {res.message}\n\n"
                     f"<i>Bot remains on standby for the next restock cycle.</i>"
                 )

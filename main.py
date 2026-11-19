@@ -42,6 +42,7 @@ from bot.handlers import (
     manual_buy_command,
     set_target_command,
     set_email_command,
+    balance_check_command,
     toggle_sim_handler,
     choose_login_type_handler,
     start_cookie_login_flow,
@@ -134,6 +135,7 @@ def build_telegram_application():
     app.add_handler(CommandHandler("sim", toggle_sim_handler))
     app.add_handler(CommandHandler("set_target", set_target_command))
     app.add_handler(CommandHandler("set_email", set_email_command))
+    app.add_handler(CommandHandler("balance_check", balance_check_command))
 
     # 4. Callback Query Handlers
     app.add_handler(CallbackQueryHandler(choose_login_type_handler, pattern="^choose_login_type$"))
