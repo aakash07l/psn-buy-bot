@@ -38,11 +38,11 @@ TARGET_QUANTITY = int(os.getenv("TARGET_QUANTITY", "1"))
 
 # Rooter card prices including platform convenience fees (from Rooter checkout)
 ROOTER_CARD_PRICES = {
-    1000: 1156.0,
-    2000: 2309.0,
-    3000: 3459.0,
-    4000: 4609.0,
-    5000: 5760.0,
+    1000: 1206.0,
+    2000: 2359.0,
+    3000: 3509.0,
+    4000: 4659.0,
+    5000: 5810.0,
 }
 
 def get_card_total_cost(denomination: int, quantity: int = 1) -> float:

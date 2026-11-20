@@ -125,14 +125,64 @@ class BrowserManager:
             timezone_id="Asia/Kolkata",
         )
 
-        # Anti-detection & token auto-injection
+        # Anti-detection & token/user_auth auto-injection
         token_injection = ""
         if account and account.get("token"):
-            tok = account["token"]
+            tok = account["token"].strip()
+            if tok.lower().startswith("bearer "):
+                tok = tok[7:].strip()
+            uid = account.get("user_id") or 0
+            
+            auth_payload = {
+                "accessToken": tok,
+                "refreshToken": tok,
+                "token": tok,
+            }
+            if uid:
+                auth_payload["userId"] = uid
+            auth_json_str = json.dumps(auth_payload)
+
+            # Explicitly add cookies to context so Playwright network requests carry session
+            try:
+                await context.add_cookies([
+                    {
+                        "name": "user_auth",
+                        "value": auth_json_str,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "secure": True,
+                        "sameSite": "Lax",
+                    },
+                    {
+                        "name": "token",
+                        "value": tok,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "secure": True,
+                        "sameSite": "Lax",
+                    },
+                    {
+                        "name": "auth_token",
+                        "value": tok,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "secure": True,
+                        "sameSite": "Lax",
+                    },
+                ])
+            except Exception as e:
+                logger.warning(f"Failed to set cookies on context: {e}")
+
             token_injection = f"""
                 try {{
-                    localStorage.setItem('token', {json.dumps(tok)});
-                    localStorage.setItem('auth_token', {json.dumps(tok)});
+                    const tok = {json.dumps(tok)};
+                    const authStr = {json.dumps(auth_json_str)};
+                    localStorage.setItem('token', tok);
+                    localStorage.setItem('auth_token', tok);
+                    localStorage.setItem('user_auth', authStr);
+                    {f"localStorage.setItem('user_id', '{uid}');" if uid else ""}
+                    document.cookie = `user_auth=${{encodeURIComponent(authStr)}}; domain=.rooter.gg; path=/; max-age=2592000; SameSite=Lax; Secure`;
+                    document.cookie = `token=${{tok}}; domain=.rooter.gg; path=/; max-age=2592000; SameSite=Lax; Secure`;
                 }} catch (e) {{}}
             """
 

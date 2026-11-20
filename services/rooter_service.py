@@ -237,6 +237,19 @@ class RooterService(BasePlatform):
             await page.wait_for_timeout(1000)
             await self.dismiss_location_popup(page)
 
+            # Check if login modal is already visible on product page
+            login_check = page.locator(".mantine-Modal-content:has-text('Login'), input[placeholder*='Mobile' i], input[type='tel'], button:has-text('Continue with Google')").first
+            if await login_check.is_visible(timeout=1000):
+                screenshot_path = await browser_manager.capture_screenshot(page, name_prefix="login_popup_early")
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message="Rooter account is NOT logged in (Login / Sign Up prompt appeared). Please verify session/cookie via /login.",
+                    error_screenshot=screenshot_path,
+                )
+
             # 1. Select Denomination
             if progress_callback:
                 await progress_callback(f"Selecting ₹{denomination:,} voucher chip...", "🎯")
@@ -310,6 +323,19 @@ class RooterService(BasePlatform):
                     await buy_btn.click(force=True)
                     await page.wait_for_timeout(1500)
 
+            # Check if Login Modal appeared instead of checkout modal
+            login_modal = page.locator(".mantine-Modal-content:has-text('Login'), input[placeholder*='Mobile' i], input[type='tel'], button:has-text('Continue with Google')").first
+            if await login_modal.is_visible(timeout=1500):
+                screenshot_path = await browser_manager.capture_screenshot(page, name_prefix="login_popup_checkout")
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message="Rooter account is NOT logged in! 'Login / Sign Up' modal opened upon clicking Buy Now. Please re-login via /login.",
+                    error_screenshot=screenshot_path,
+                )
+
             # 6. Inside Delivery Details modal
             await self.dismiss_location_popup(page)
             
@@ -341,16 +367,46 @@ class RooterService(BasePlatform):
                 if progress_callback:
                     await progress_callback(f"Submitting final wallet payment for ₹{total_amount:,}...", "💳")
                 await modal_pay_btn.click(force=True)
+            else:
+                screenshot_path = await browser_manager.capture_screenshot(page, name_prefix="pay_btn_not_found")
+                page_body = await page.inner_text("body")
+                if "insufficient" in page_body.lower() or "not enough balance" in page_body.lower():
+                    return PurchaseResult(
+                        success=False,
+                        platform="rooter",
+                        denomination=denomination,
+                        quantity=quantity,
+                        message=f"Rooter checkout error: Insufficient wallet balance for ₹{total_amount:,.2f}.",
+                        error_screenshot=screenshot_path,
+                    )
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message="Final payment button not found in Rooter checkout modal. Order NOT placed.",
+                    error_screenshot=screenshot_path,
+                )
 
             # 7. Wait for Order Confirmation & Extract Codes
             if progress_callback:
                 await progress_callback("Processing order & extracting PlayStation PIN...", "⏳")
 
             await page.wait_for_timeout(4000)
-            screenshot_path = await browser_manager.capture_screenshot(page, name_prefix="order_success")
+            screenshot_path = await browser_manager.capture_screenshot(page, name_prefix="order_result")
 
             # Extract order text & PINs
             content_text = await page.inner_text("body")
+
+            if "transaction failed" in content_text.lower() or "payment failed" in content_text.lower():
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message="Rooter checkout failed: Transaction or payment failed.",
+                    error_screenshot=screenshot_path,
+                )
 
             # Extract Voucher Codes & PINs
             code_matches = re.findall(r"\b([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})\b", content_text)
@@ -358,7 +414,6 @@ class RooterService(BasePlatform):
                 code_matches = re.findall(r"\b([A-Z0-9]{12})\b", content_text)
 
             order_id_match = re.search(r"Order\s*ID[:\s]+([A-Za-z0-9\-_]+)", content_text, re.IGNORECASE)
-            order_id = order_id_match.group(1) if order_id_match else f"RTR-{int(time.time())}"
 
             pin_match = re.search(r"PIN[:\s]+([0-9]{4,8})", content_text, re.IGNORECASE)
             voucher_pin = pin_match.group(1) if pin_match else None
@@ -366,7 +421,22 @@ class RooterService(BasePlatform):
             # Deduplicate extracted codes
             unique_codes = list(dict.fromkeys(code_matches))
 
-            # Deduct balance on account if live order
+            has_success_text = any(s in content_text.lower() for s in ["order successful", "order placed", "order completed", "congratulations", "voucher code", "voucher details", "pin:"])
+
+            if not unique_codes and not order_id_match and not has_success_text:
+                logger.error(f"[{acc_label}] No voucher codes, order ID, or success indicators found after payment!")
+                return PurchaseResult(
+                    success=False,
+                    platform="rooter",
+                    denomination=denomination,
+                    quantity=quantity,
+                    message="Payment submitted but order confirmation could not be verified on Rooter. No voucher code received. Check screenshot.",
+                    error_screenshot=screenshot_path,
+                )
+
+            order_id = order_id_match.group(1) if order_id_match else f"RTR-{int(time.time())}"
+
+            # Deduct balance on account ONLY if live order truly confirmed
             if account and not simulation and not config.SIMULATION_MODE:
                 from services.account_manager import account_manager
                 account_manager.deduct_balance(account["id"], total_amount)

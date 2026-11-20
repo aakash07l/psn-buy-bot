@@ -40,12 +40,35 @@ def extract_user_id(token: str) -> int:
 
 
 def generate_storage_state_for_token(token: str, user_id: int = 0) -> Dict[str, Any]:
-    """Generates a valid Playwright storage_state structure for a Rooter Bearer token."""
+    """Generates a valid Playwright storage_state structure for a Rooter Bearer token including user_auth."""
     clean_token = token.strip()
     if clean_token.lower().startswith("bearer "):
         clean_token = clean_token[7:].strip()
 
+    if not user_id:
+        user_id = extract_user_id(clean_token)
+
+    auth_payload = {
+        "accessToken": clean_token,
+        "refreshToken": clean_token,
+        "token": clean_token,
+    }
+    if user_id:
+        auth_payload["userId"] = user_id
+
+    auth_json_str = json.dumps(auth_payload)
+
     cookies = [
+        {
+            "name": "user_auth",
+            "value": auth_json_str,
+            "domain": ".rooter.gg",
+            "path": "/",
+            "expires": -1,
+            "httpOnly": False,
+            "secure": True,
+            "sameSite": "Lax",
+        },
         {
             "name": "token",
             "value": clean_token,
@@ -71,6 +94,7 @@ def generate_storage_state_for_token(token: str, user_id: int = 0) -> Dict[str, 
     local_storage = [
         {"name": "token", "value": clean_token},
         {"name": "auth_token", "value": clean_token},
+        {"name": "user_auth", "value": auth_json_str},
     ]
     if user_id:
         local_storage.append({"name": "user_id", "value": str(user_id)})
@@ -182,6 +206,21 @@ class AccountManager:
                 except Exception:
                     pass
 
+        # 3. Ensure all loaded accounts have up-to-date storage_state with user_auth cookie
+        for acc in loaded_accounts.values():
+            tok = acc.get("token")
+            uid = acc.get("user_id") or extract_user_id(tok)
+            st_path_str = acc.get("storage_state_path")
+            if tok and st_path_str:
+                st_path = Path(st_path_str)
+                try:
+                    st_data = generate_storage_state_for_token(tok, uid)
+                    st_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(st_path, "w", encoding="utf-8") as f:
+                        json.dump(st_data, f, indent=2)
+                except Exception:
+                    pass
+
         self.accounts = list(loaded_accounts.values())
         self._save()
         logger.info(f"AccountManager initialized with {len(self.accounts)} account(s).")
@@ -239,18 +278,33 @@ class AccountManager:
         clean_token = token.strip()
         if clean_token.lower().startswith("bearer "):
             clean_token = clean_token[7:].strip()
-        # If input was cookie format: token=xxx; or auth_token=xxx
-        if "token=" in clean_token:
+        # If input was cookie format: user_auth=xxx; or token=xxx; or auth_token=xxx
+        uid = 0
+        if "user_auth=" in clean_token or "token=" in clean_token:
+            import urllib.parse
             for part in clean_token.split(";"):
                 part = part.strip()
-                if part.startswith("token="):
+                if part.startswith("user_auth="):
+                    val = urllib.parse.unquote(part[10:].strip())
+                    try:
+                        u_obj = json.loads(val)
+                        if isinstance(u_obj, dict):
+                            clean_token = u_obj.get("accessToken") or u_obj.get("token") or clean_token
+                            if u_obj.get("userId"):
+                                uid = int(u_obj.get("userId"))
+                    except Exception:
+                        if len(val) > 20:
+                            clean_token = val
+                    break
+                elif part.startswith("token="):
                     clean_token = part[6:].strip()
                     break
                 elif part.startswith("auth_token="):
                     clean_token = part[11:].strip()
                     break
 
-        uid = extract_user_id(clean_token)
+        if not uid:
+            uid = extract_user_id(clean_token)
 
         # Check if account already exists by token or userId
         for acc in self.accounts:
@@ -339,6 +393,14 @@ class AccountManager:
                     if cname in ("token", "auth_token", "jwt"):
                         token = c.get("value", "")
                         break
+                    elif cname == "user_auth":
+                        try:
+                            val = json.loads(c.get("value", "{}"))
+                            token = val.get("accessToken") or val.get("token") or token
+                            if val.get("userId"):
+                                uid = int(val.get("userId"))
+                        except Exception:
+                            pass
                 # Check origins localStorage
                 if not token:
                     for orig in st_data.get("origins", []):
